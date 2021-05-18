@@ -6,15 +6,15 @@ Here we host the `Rmarkdowns` used to analyse the data from the manuscript - [Co
 ### Non-essential MATalpha yeast screen
 
 1. [Curate various S.cerevisiae specific functional genesets](/Nonessential_MATa_screen/src/00_createYeastGenesets.html)
-2. [Raw data quality control](01_rawDataQualityControl.html)
-3. [Data Normalization](02_rawDataNomalization.html)
-4. [Hits identification](03_hitsIdentification.html)
+2. [Raw data quality control](/Nonessential_MATa_screen/src/01_rawDataQualityControl.html)
+3. [Data Normalization](/Nonessential_MATa_screen/src/02_rawDataNomalization.html)
+4. [Hits identification](/Nonessential_MATa_screen/src/03_hitsIdentification.html)
 5. Enrichment analysis
-    - [Gene Ontology Biological process](04_enrichmentAnalysis_GOBP.html)
-    - [Gene Ontology Molecular function](04_enrichmentAnalysis_GOMF.html)
-    - [KEGG pathways](04_enrichmentAnalysis_KEEG.html)
-    - [Yeast phenotypes](04_enrichmentAnalysis_Phenotypes.html)
-    - [Yeast Transcription factor targets](04_enrichmentAnalysis_TFtargets.html)
+    - [Gene Ontology Biological process](/Nonessential_MATa_screen/src/04_enrichmentAnalysis_GOBP.html)
+    - [Gene Ontology Molecular function](/Nonessential_MATa_screen/src/04_enrichmentAnalysis_GOMF.html)
+    - [KEGG pathways](/Nonessential_MATa_screen/src/04_enrichmentAnalysis_KEEG.html)
+    - [Yeast phenotypes](/Nonessential_MATa_screen/src/04_enrichmentAnalysis_Phenotypes.html)
+    - [Yeast Transcription factor targets](/Nonessential_MATa_screen/src/04_enrichmentAnalysis_TFtargets.html)
 
 
 ### Essential DAmP yeast screen
