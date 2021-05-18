@@ -5,7 +5,7 @@ Here we host the `Rmarkdowns` used to analyse the data from the manuscript - [Co
 
 ### Non-essential MATalpha yeast screen
 
-1. [Curate various S.cerevisiae specific functional genesets](00_createYeastGenesets.html)
+1. [Curate various S.cerevisiae specific functional genesets](/Nonessential_MATa_screen/src/00_createYeastGenesets.html)
 2. [Raw data quality control](01_rawDataQualityControl.html)
 3. [Data Normalization](02_rawDataNomalization.html)
 4. [Hits identification](03_hitsIdentification.html)
