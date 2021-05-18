@@ -1,0 +1,471 @@
+---
+title: "Raw data quality control"
+author: "Ashwini Kumar Sharma, PhD"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    code_folding: hide
+---
+
+```{r knitr_init, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print=100000)
+opts_chunk$set(echo=TRUE,
+	             cache=FALSE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=80)
+```
+
+***
+
+## Initialization
+
+We start the analysis by initializing the packages required for all the analysis performed in this section. We also define the root directory, within which all the input/output operations for this project will be performed. At the [end of this document](#SI), detailed software version information is provided for easier reproducibility of the analysis.
+
+```{r}
+library(reshape2)
+library(ggplot2)
+library(ggrepel)
+library(ggpubr)
+library(lsr)
+library(plotly)
+library(DT)
+library(WriteXLS)
+path = "/Users/ashwin/Documents/Projects/YeastScreen/Nonessential_MATa_screen/"
+```
+
+***
+
+## Cleaning raw data
+
+Firstly we read the raw yeast redox screen data and remove outlier (extreme values) and `NA`. Typically, outlier removal is not considered good data analysis practice, however, we do it here because we know that the extreme values comes from technical artifacts. For example, roGFP2 ratios cannot be negative and those which are significantly higher than the plate average are ambiguous signals.
+
+Outliers were detected as -
+
+* upper outlier values > 75th quantile value for a plate + 3 * plate IQR value
+* lower outlier values < 25th quantile value for a plate - 3 * plate IQR value
+
+The outlier values are all set to ```NA``` and values greater than the lower bound threshold but less than 0 were set to pseudo minimum value of 0.0001 as roGFP2 ratios can't be less than 0.
+
+```{r}
+rawDat = readRDS(paste0(path,"data/workspaces/YeastMutantRedox_RawData.RDS"))
+rawDatCleaned = vector("list", length = 3)
+names(rawDatCleaned) = c("Glucose", "Galactose", "Glycerol")
+for(i in names(rawDatCleaned))
+{
+  dat = rawDat[rawDat$Type == i,]
+  dat = split(dat, dat$Plate)
+  dat = lapply(dat, function(x){
+                                 vals = x$roGFP2.ratio
+                                 lb = quantile(vals, probs = 0.25, na.rm=T) - (3 * IQR(vals, na.rm=T))
+                                 ub = quantile(vals, probs = 0.75, na.rm=T) + (3 * IQR(vals, na.rm=T))
+                                  
+                                 vals[vals < lb | vals > ub] = NA
+                                 vals[vals > lb & vals < 0] = 10^-4
+                                  
+                                 x$roGFP2.ratio = vals
+                                 x = x[!is.na(x$roGFP2.ratio),]
+                                 
+                                 return(x)})
+  
+  rawDatCleaned[[i]] = do.call("rbind", dat)
+  rm(dat)
+}
+
+rawDatCleaned = do.call("rbind", rawDatCleaned)
+rawDatCleaned = droplevels(rawDatCleaned)
+rownames(rawDatCleaned) = 1:nrow(rawDatCleaned)
+```
+
+Next, lets check the summaries of the raw roGFP2 redox screen data and the cleaned raw data for comparison.
+
+Raw data looked like -
+
+```{r}
+summary(rawDat)
+```
+
+Cleaned data looked like -
+
+```{r}
+summary(rawDatCleaned)
+```
+
+Percentage of data removed after outlier removal -
+
+```{r}
+round((c(nrow(rawDat) - nrow(rawDatCleaned))/nrow(rawDat)) * 100,2)
+```
+
+```{r, echo=F}
+rm(i, rawDat)
+```
+
+Below is the table of cleaned raw data, which will be used in all of the next analyses
+
+```{r}
+datatable(rawDatCleaned, rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         ))
+```
+
+***
+
+## Distribution of raw roGFP2 ratios
+
+Distribution of raw roGFP2 ratios (absolute ratios) per plate
+
+```{r, fig.width = 20, fig.height = 8}
+p = ggplot(rawDatCleaned) + theme_bw(base_size = 8) +
+geom_boxplot(aes(x = Plate, y = roGFP2.ratio), outlier.size = 0.1, lwd=0.2) +
+facet_grid(Content ~ Type, scales = "free") +
+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+
+ggsave(filename = paste0(path,"analysis/QC/roGFP2_ratio_RAWdata_distribution_nutrient_compartments.pdf"), plot = p, width = 12, height = 5)
+
+p
+
+```
+
+***
+
+## Identify bad quality plates
+
+Based on the box plots above we identify the problematic plates by comparing the IQR and median values from each box plots. We label the outliers as bad plates. Outliers are those which beyond the 95th percentile of IQR or among the topmost or lowest 5% of median values.
+
+```{r, fig.width = 10, fig.height = 10, fig.align="center"}
+badPlates = rawDatCleaned
+badPlates = split(badPlates, badPlates$Type)
+badPlates = lapply(badPlates, function(x){split(x, x$Content)})
+
+badPlates = lapply(badPlates, function(f1){lapply(f1, function(f2){
+  z = split(f2, f2$Plate)
+  z = t(sapply(z, function(f3){
+    iqr = IQR(f3$roGFP2.ratio, na.rm=T)
+    med = median(f3$roGFP2.ratio, na.rm=T)
+    return(c(iqr=iqr, median=med))
+  }))
+  z = data.frame(Plate = rownames(z), iqr = z[,"iqr"], median = z[,"median"], stringsAsFactors = F)
+})})
+
+tmp = matrix(NA, ncol=5, nrow=1)
+colnames(tmp) = c("Plate", "iqr", "median", "Content", "Type")
+
+for(i in 1: length(badPlates))
+{
+  tmp1 = do.call("rbind", badPlates[[i]]) 
+  tmp1 = cbind(tmp1, 
+               Content = sapply(strsplit(rownames(tmp1), ".", fixed=T), function(x)x[1]),
+               Type = names(badPlates)[i]
+  )
+  tmp = rbind(tmp, tmp1)
+  rm(tmp1)
+}
+rm(i)
+
+tmp = tmp[-1,]
+rownames(tmp) = 1:nrow(tmp)
+badPlates = tmp; rm(tmp)
+badPlates$Content = factor(badPlates$Content, levels = c("Control", "Cytoplasm", "Mitochondria"))
+badPlates$Type = factor(badPlates$Type, levels = c("Glucose", "Galactose", "Glycerol"))
+
+vline = melt(
+  sapply(split(badPlates,  badPlates$Content), 
+         function(x){sapply(split(x, x$Type), 
+                            function(y){quantile(y$iqr, prob = 0.95, na.rm=T)}
+         )
+         }
+  )
+)
+vline$Var1 = factor(sapply(strsplit(as.character(vline$Var1), ".", fixed=T), function(x)x[1]),
+                    levels = c("Glucose", "Galactose", "Glycerol", "Minimal"))
+colnames(vline)[1:2] = c("Type", "Content")
+
+hline1 = melt(sapply(split(badPlates,  badPlates$Content), 
+                     function(x){sapply(split(x, x$Type), 
+                                        function(y){quantile(y$median, prob = 0.05, na.rm=T)}
+                     )
+                     }
+)
+)
+hline1$Var1 = factor(sapply(strsplit(as.character(hline1$Var1), ".", fixed=T),function(x)x[1]), 
+                     levels = c("Glucose", "Galactose", "Glycerol", "Minimal"))
+colnames(hline1)[1:2] = c("Type", "Content")
+
+hline2 = melt(sapply(split(badPlates,  badPlates$Content), 
+                     function(x){sapply(split(x, x$Type), 
+                                        function(y){quantile(y$median, prob = 0.95, na.rm=T)}
+                     )
+                     }
+)
+)
+
+hline2$Var1 = factor(sapply(strsplit(as.character(hline2$Var1), ".", fixed=T),function(x)x[1]),
+                     levels = c("Glucose", "Galactose", "Glycerol"))
+colnames(hline2)[1:2] = c("Type", "Content")
+
+a <- vline$value[match(paste0(badPlates$Content, badPlates$Type), paste0(vline$Content, vline$Type))] < badPlates$iqr
+b <- hline1$value[match(paste0(badPlates$Content, badPlates$Type), paste0(hline1$Content, hline1$Type))] > badPlates$median
+c <- hline2$value[match(paste0(badPlates$Content, badPlates$Type), paste0(hline2$Content, hline2$Type))] < badPlates$median
+thr = a | b | c
+badPlates$IsOutlier= thr
+rm(a,b,c,thr)
+
+p = ggplot(badPlates) + theme_bw(base_size = 9) + 
+labs(x = "Plate IQR roGFP2 ratio", y = "Plate median roGFP2 ratio") +
+geom_point(aes(x = iqr, y = median, color = IsOutlier)) +
+facet_grid(Content ~ Type, scales="free") +
+geom_hline(data = hline1, aes(yintercept = value)) +
+geom_hline(data = hline2, aes(yintercept = value)) +
+geom_vline(data = vline, aes(xintercept = value)) +
+geom_text_repel(data = subset(badPlates, IsOutlier), aes(x = iqr, y=median, label=Plate), size=2) +
+theme(legend.position = "top")
+
+ggsave(filename = paste0(path,"analysis/QC/roGFP2_ratio_RAWdata_badPlates.pdf"), plot = p, width = 7, height = 7)
+
+p
+
+```
+
+```{r, echo=F}
+rm(badPlates, hline1, hline2, vline)
+```
+
+***
+
+## Identification of edge effects
+
+A well known technical issue with yeast mutant screens is the altered growth characteristics of yeast colonies growing at the edge of plates. Next, we look at how roGFP2 ratios are different between edge wells and non-edge wells. 
+
+These are the edge wells and the mutants originating from these locations should be carefully analyzed.
+
+```{r}
+edge = unique(c(
+                paste0(c(LETTERS, letters[1:6]), "01"), #left
+                paste0(c(LETTERS, letters[1:6]), "48"), #right
+                paste0("A", c(paste0(0,1:9), 10:48)),   #top
+                paste0("f", c(paste0(0,1:9), 10:48))    #bottom
+              )) 
+
+# Print edge wells
+edge
+```
+
+Below, we see that some plates do show some edge effects however, most of the plates are fine. Note, pvalues can be high when thre are large number of data points, thus its important to look at the effect sizes while analysing the significance of the difference.
+
+```{r, fig.width = 12, fig.height = 10, fig.align="center"}
+edgeDat = rep("non edge wells", nrow(rawDatCleaned))
+edgeDat[rawDatCleaned$Well %in% edge] = "edge wells"
+
+edge = rawDatCleaned
+edge$edge = edgeDat; rm(edgeDat)
+
+p1 = ggviolin(data = edge, x = "edge", y = "roGFP2.ratio", fill = "edge",
+         palette = c("#E7B800", "#FC4E07"), size = 0.5,
+         draw_quantiles = c(0.5),
+         #add = "boxplot", add.params = list(fill = "white", size = 0.3), 
+         ggtheme = theme_bw(base_size = 8)) +
+         stat_compare_means(method = "wilcox.test",label = "p.format", size=2.5) + 
+  labs(x="", y ="raw roGFP2 ratio") + theme(legend.position = "right", axis.text.x = element_blank(), axis.ticks.x = element_blank()) 
+p1 = facet(p1, facet.by = "Plate", nrow = 9, scales = "free_y")
+
+ggsave(filename = paste0(path,"analysis/QC/roGFP2_ratio_RAWdata_edge_effects_violinplots.pdf"), plot = p1, width = 7.5, height = 8)
+
+p1
+
+```
+
+Density distribution of values
+
+```{r, fig.width = 10, fig.height = 10, fig.align="center"}
+p2 = ggdensity(edge, x = "roGFP2.ratio",
+               add = "median", #rug = TRUE,
+               fill = "edge",
+               palette = c("#00AFBB", "#E7B800"), ggtheme = theme_bw(base_size = 9))
+p2 = facet(p2, facet.by = "Plate", nrow = 9)
+
+ggsave(filename = paste0(path,"analysis/QC/roGFP2_ratio_RAWdata_edge_effects_densityplots.pdf"), plot = p2, width = 10, height = 7)
+
+p2
+
+```
+
+Visulaizing the differences using both effect size (Fold change, Cohen D) and pvalue
+
+```{r}
+# Computing distribution difference statistics
+stats = split(edge, edge$Plate)
+stats = t(sapply(stats, function(x){
+  
+  y = x$roGFP2.ratio[x$edge == "edge wells"]
+  n = x$roGFP2.ratio[x$edge== "non edge wells"]
+  
+  fc = log2(median(y, na.rm=T)/median(n, na.rm=T))
+  pv = wilcox.test(y, n)$p.value
+  cd = cohensD(y,n)
+  #p = signif(p,2)
+  return(c(log2fc = fc, wilcoxP = pv, CohenD = cd))
+}))
+
+stats = as.data.frame(stats)
+stats$log2fc = round(stats$log2fc, 2)
+stats$wilcoxP = signif(-log10(p.adjust(stats$wilcoxP, method="fdr")),2)
+stats$CohenD = round(stats$CohenD, 2)
+stats$Plates = paste0("Plate-", rownames(stats))
+
+# Volcano plot
+
+p3 = ggplot(stats, aes(x = log2fc, y = wilcoxP, color = CohenD, text = Plates)) + 
+theme_bw(base_size = 8) + xlim(-1,1) + labs(y = "-log10(fdr pval)") +
+geom_point(size = 0.8) + geom_hline(yintercept = -log10(0.05)) + geom_vline(xintercept = c(-0.5, 0.5)) +
+geom_text_repel(data = stats[abs(stats$log2fc) > 0.5 & stats$wilcoxP > -log10(0.05),], aes(label = Plates), size = 2) +
+theme(panel.grid = element_blank())
+
+ggsave(filename = paste0(path,"analysis/QC/roGFP2_ratio_RAWdata_edge_effects_badPlates.pdf"), plot = p3, width = 3.5, height = 2.5)
+
+ggplotly(p3)
+```
+
+
+```{r, echo =FALSE}
+rm(edge)
+```
+
+***
+
+## Variance among controls
+
+Next we look into the variance exhibited by the controls across plates and nutrient conditions. Ideally, all controls in the plate should have similar values i.e variance close to zero. Below we show the variance of raw roGFP2 ratios among controls per plate and group.
+
+```{r}
+ctrlVar = rawDatCleaned %>% filter(Content == "Control") %>% select(Gene.Symbol, 
+    Plate, Type, Group, roGFP2.ratio) %>% group_by(Plate, Type, Group) %>% mutate(Control_variance = round(var(roGFP2.ratio, 
+    na.rm = T), 4)) %>% ungroup() %>% select(Gene.Symbol, Plate, Type, Group, Control_variance) %>% 
+    rename(Genes = Gene.Symbol, Nutrient = Type) %>% mutate(Plate = paste0("P-", 
+    Plate)) %>% distinct()
+
+plot_ly(ctrlVar, x = ~Group, y = ~Plate, z = ~Control_variance, text = ~Genes, type = "scatter3d", 
+    mode = "markers", marker = list(size = 3), opacity = 1, color = ~Nutrient)
+```
+
+Next we we visualize the fact that in a good screen, individual control values should not deviate much from the median value of all controls from that same plate. For a given plate $i$, the normalized control values i.e $NormCtrl$ is given as - $$NormCtrl_i = \frac{Ctrl_i} {median(Ctrl_i)}$$ We plot these scaled control values per plate across conditions below. Ideally these values should be close to 1 (shown as red horizontal lines).
+
+```{r}
+ctrlDat = split(rawDatCleaned, rawDatCleaned$Type)
+ctrlDat = lapply(ctrlDat, function(x){split(x, x$Plate)})
+cvDat = ctrlDat
+
+for( i in 1: length(ctrlDat))
+{
+  for(j in 1: length(ctrlDat[[i]]))
+  {
+    tmp = droplevels(ctrlDat[[i]][[j]])
+    tmp = tmp[, -2]
+  
+    #Plate control
+    tmp.ctrl = tmp[tmp$Content == "Control",]
+
+    #Normalizing factor
+    nf = median(tmp.ctrl$roGFP2.ratio, na.rm=T)
+    
+    # Measure control value deviation from plate median
+    ctrlDat[[i]][[j]] = data.frame(Gene = tmp.ctrl$Gene.Symbol, 
+                                   NormControl = round(tmp.ctrl$roGFP2.ratio/nf, 3),
+                                   stringsAsFactors = F)
+    cvDat[[i]][[j]] = round((mad(tmp.ctrl$roGFP2.ratio)/nf) * 100)
+    
+    #Deleting
+    rm(tmp, tmp.ctrl,  nf)
+  }
+  rm(j)
+ }
+rm(i)
+```
+
+Tbale of these scaled control values -
+
+```{r, fig.width = 15, fig.height = 8, fig.align="center"}
+ctrlDat = melt(ctrlDat, id = "Gene")
+ctrlDat = ctrlDat[,c(4,5,1,3)]
+colnames(ctrlDat) = c("Plate", "Nutrient", "Gene", "NormControl")
+ctrlDat$Plate = as.factor(ctrlDat$Plate)
+ctrlDat$Nutrient = factor(ctrlDat$Nutrient, levels = c("Glucose", "Galactose", "Glycerol"))
+
+datatable(ctrlDat, rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                        ))
+```
+
+Plotting these scaled control values -
+
+```{r, fig.width = 15, fig.height = 8, fig.align="center"}
+
+p = ggplot(ctrlDat) + theme_bw(base_size = 8) + labs(y="Control / Median plate control (roGFP2 ratios)") +
+geom_boxplot(aes(x = Plate, y = NormControl), outlier.size = 0.1, lwd=0.2) +
+facet_wrap( ~ Nutrient) + geom_hline(yintercept = 1, color = "red") +
+geom_text_repel(data = subset(ctrlDat, NormControl > 3), aes(x = Plate, y = NormControl, label = Gene), size = 2) + theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) 
+
+ggsave(filename = paste0(path,"analysis/QC/roGFP2_ratio_RAWdata_Controls_normalized_by_plate_control_median.pdf"), plot = p, width = 20, height = 7)
+
+p
+
+```
+
+A more standard way of calculating the variance among the controls is by computing the robust coefficient of variance [see here](https://stats.stackexchange.com/questions/38635/a-robust-non-parametric-measure-like-coefficient-of-variation-iqr-median-o). For a given plate $i$, this is given as - $$CoefVar_i = \frac{mad(Ctrl_i)}{median(Ctrl_i)}$$ `mad` is `Median absolute deviation`
+
+Plotting these robust coefficient of variation for control values- 
+
+```{r, fig.width = 15, fig.height = 4, fig.align="center"}
+cvDat = melt(cvDat)
+cvDat = cvDat[,c(2,3,1)]
+colnames(cvDat) = c("Plate", "Nutrient", "Dev")
+cvDat$Plate = as.factor(cvDat$Plate)
+cvDat$Nutrient = factor(cvDat$Nutrient, levels = c("Glucose", "Galactose", "Glycerol"))
+
+p = ggplot(cvDat, aes(Plate, Dev)) + theme_bw(base_size = 8) + 
+labs(y="% of deviation from median plate control roGFP2 ratios") +
+geom_bar(stat="identity") + 
+facet_wrap( ~ Nutrient) + geom_hline(yintercept = 30, color = "black") +
+geom_hline(yintercept = 50, color = "red") +
+theme(panel.grid = element_blank(), axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) 
+
+ggsave(filename = paste0(path,"analysis/QC/roGFP2_ratio_RAWdata_Controls_Coef_variation.pdf"), plot = p, width = 12, height = 3.5)
+
+p
+```
+
+```{r, echo=F}
+rm(ctrlDat, cvDat)
+```
+
+***
+
+## Saving the data
+
+Finally we save the cleaned raw Data as a `.RDS` (R data object), which will be used for the next step of normalization
+
+```{r, echo=FALSE}
+saveRDS(rawDatCleaned, paste0(path,"data/workspaces/YeastMutantRedox_RawDataCleaned.RDS"))
+WriteXLS(rawDatCleaned, ExcelFileName = paste0(path,"analysis/supplementary/tables/YeastMutantRedox_RawData_OutliersCleaned.xlsx"), 
+AdjWidth =TRUE, BoldHeaderRow = TRUE, FreezeRow = 1)
+```
+
+## Session information {#SI}
+
+```{r}
+sessionInfo()
+```
