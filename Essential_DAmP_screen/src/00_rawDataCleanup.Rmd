@@ -1,0 +1,397 @@
+---
+title: "Raw data cleanup"
+author: "Ashwini Kumar Sharma, PhD"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    code_folding: hide
+---
+
+```{r knitr_init, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print=100000)
+opts_chunk$set(echo=TRUE,
+	             cache=FALSE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=80)
+```
+
+## Initialization
+
+We start the analysis by initializing the packages required for all the analysis performed in this section. We also define the root directory, within which all the input/output operations for this project will be performed. At the [end of this document](#SI), detailed software version information is provided for easier reproducibility of the analysis.
+
+```{r}
+library(reshape2)
+library(ggplot2)
+library(DT)
+library(readxl)
+library(WriteXLS)
+
+path = "/Users/ashwin/Documents/Projects/YeastScreen/Essential_DAmP_screen/"
+```
+
+***
+
+## Global plate mapping annotation
+
+A global plate mapping template is an annotation file which defines the content of each well across the plates. This file was created and kindly provided by [Manisha Wadhwa](mailto:m.wadhwa@dkfz-heidelberg.de). Each plate is composed of `32 x 48` wells arranged in `4 x 4` grid consisting of redox measurements in quadruplicates from **Mitochondria, Cytoplasm, Blank and Control**. In total, this results in `1536` individual wells and `384` wells per measurement in one plate. We will read this mapping file provided by Manisha and check its integrity for -
+
+* How the contents are named
+* Number of wells assigned to each content type
+
+The distribution of wells per assigned category in the mapping table is as below - 
+
+```{r}
+mapPlate = data.frame(read_excel(paste0(path,"data/annotations/plateMapping_DAmP.xlsx"), sheet = 1))
+colnames(mapPlate) = c("Well", "Content", "Group", "Well_96")
+table(mapPlate$Content)
+```
+
+Everything looks in order. As mentioned before we have `32 x 48 = 1536` wells per plate. Since we have quadruplicates, we should have `1536/4 = 384` values per category. 
+
+The correct naming scheme, as suggested by Manisha in our discussions, should have been as follows - 
+
+* Blank B is Blank
+* Control C1-C4 is Control
+* Sample X1 is Mitochondria
+* Sample X2 is Cytoplasm
+
+We visualize the counts per Category and Group. Ideally the count should be `4` since we have quadruplicates.
+
+```{r, fig.height = 2, fig.width = 8.5, fig.align = "center"}
+# See visually the counts per Category and Group
+mat = melt(table(mapPlate$Content, mapPlate$Group))
+colnames(mat) = c("Category", "Group", "Counts")
+mat$Counts = factor(mat$Counts)
+
+ggplot(mat, aes(x=Group, y = Category, fill = Counts)) + theme_grey(base_size = 7) + 
+geom_tile(colour = "white") +  
+scale_fill_manual(values = c("#efedf5", "#bcbddc", "#807dba", "#4a1486")) +
+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+```
+
+```{r, echo=F}
+rm(mat)
+```
+
+We next combine the controls into one category. After this, we perform some sanity checks to see that we have the same counts all across. Also, the number of wells per categories looks correct.
+
+```{r, fig.height = 1.5, fig.width = 8.5, fig.align = "center"}
+
+# Homegenizing content annotations
+mapPlate$Content[mapPlate$Content == "Blank"] = "Blank"
+mapPlate$Content[mapPlate$Content %in% paste0("Control C", 1:4)] = "Control"
+mapPlate$Content[mapPlate$Content == "Sample X1"] = "Mitochondria"
+mapPlate$Content[mapPlate$Content == "Sample X2"] = "Cytoplasm"
+
+# Number of wells per category
+table(mapPlate$Content)
+
+# After correction, visualize the counts per Category and Group
+mat = melt(table(mapPlate$Content, mapPlate$Group))
+colnames(mat) = c("Category", "Group", "Counts")
+mat$Counts = factor(mat$Counts)
+
+ggplot(mat, aes(x=Group, y = Category, fill = Counts)) + theme_grey(base_size = 7) + 
+geom_tile(colour = "white") +  
+scale_fill_manual(values = c("#efedf5", "#bcbddc", "#807dba", "#4a1486")) +
+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+```
+
+```{r, echo=F}
+rm(mat)
+```
+
+***
+
+## Yeast mutant gene annotations
+
+Next, we will read the annotation file having the information on the essential yeast mutant genes and their mapping order on the plates. On this we perform some basic exploratory analysis. It has information about `788` mutants (see the number of rows in the table below).
+
+```{r}
+geneAnno = read.csv(paste0(path,"data/annotations/DAmP_annotation.csv"), 
+                    stringsAsFactors = F)
+geneAnno = geneAnno[,c(4,5,7,10)]
+geneAnno$SystematicName = gsub("  ", "", geneAnno$SystematicName)
+
+ids = do.call("rbind", strsplit(geneAnno$transOMIC.PRC, " ", fixed=T))
+colnames(ids) = c("Plate", "Well")
+ids[,2] = gsub("_", "",ids[,2])
+geneAnno = geneAnno[, - ncol(geneAnno)]
+geneAnno = cbind(geneAnno, ids)
+geneAnno$Plate = factor(as.character(geneAnno$Plate), levels = as.character(c(1:12)))
+
+datatable(geneAnno, rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                         dom = 'Bfrtip', 
+                         buttons = c('csv', 'excel', 'print')
+                         ))
+
+```
+
+In case of missing gene symbols, we have replaced this with the systematic name of the mutant.
+
+```{r}
+sum(is.na(geneAnno$Gene.Symbol))
+geneAnno$Gene.Symbol[is.na(geneAnno$Gene.Symbol)] = geneAnno$SystematicName[is.na(geneAnno$Gene.Symbol)]
+```
+
+Total number of unique mutant annotation (gene symbols) in the provided mutant annotation file
+
+```{r}
+length(unique(geneAnno$Gene.Symbol))
+sum(duplicated(geneAnno$Gene.Symbol))
+```
+
+Number of mutants per plate is visualized below
+
+```{r, fig.height=2.5, fig.width=7, fig.align = "center"}
+dat = sapply(split(geneAnno, geneAnno$Plate), nrow)
+dat = data.frame(Plates = names(dat), Counts = as.numeric(dat))
+dat$Plates = factor(as.character(dat$Plates), levels = as.character(c(1:12)))
+
+ggplot(data=dat, aes(x=Plates, y=Counts)) + theme_bw(base_size = 7) + 
+geom_bar(stat="identity", position=position_dodge()) +
+geom_text(aes(label=Counts), vjust = -0.5, position = position_dodge(0.9), size=2) +
+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+```
+
+We then split this mutant annotation table into a list object with one slot per plate. For sanity checks, we count the number of plates and they are `12` as expected. 
+
+```{r}
+geneAnno = split(geneAnno, geneAnno$Plate)
+length(geneAnno)
+```
+
+```{r, echo=F}
+rm(dat, ids)
+```
+
+***
+
+## Redox screen plates naming scheme
+
+In the previous steps, we have read only the plate annotation files (provided by Manisha) and corrected them. Now we will read actual plates with the redox values. However before compiling the values we will check the naming scheme used in each plate and make sure that this is consistent with the corrected annotation files above. All looks good. Ideally, the total count should be `7 ( i.e Blank B, Control C1-C4, Sample X1-X2 )`.
+
+```{r, fig.width=5, fig.height=1.5, fig.align = "center"}
+classType = vector("list",3)
+names(classType) = c("glc","gal","gly")
+for(i in names(classType))
+{
+  files = list.files(paste0(path,"plateReadings/", i), full.names=T)
+  #files = grep("Control", files, invert = T, value = T)
+  
+  for(j in files)
+  {
+    #Extracting plate identifier
+    plate = gsub(paste0("_", i,".CSV"), "", sapply(strsplit(j,"/", fixed=T), function(x)x[length(x)]))
+    
+    # Raw data per plate
+    tmpDat = read.csv(j, skip = 6, stringsAsFactors = F, header = T)
+    tmpDat = tmpDat[,c(1:3,8:9)]
+    colnames(tmpDat)[2:3] = c("Content.Plate", "Group.Plate")
+    classType[[i]][[plate]] = table(tmpDat$Content.Plate)
+    
+    rm(plate, tmpDat)
+  }
+  rm(j, files)
+}
+
+glc = melt(classType$glc)
+glc = sapply(split(glc, glc$L1), nrow)
+
+gal = melt(classType$gal)
+gal = sapply(split(gal, gal$L1), nrow)
+
+gly = melt(classType$gly)
+gly = sapply(split(gly, gly$L1), nrow)
+
+#mm = melt(classType$mm)
+#mm = sapply(split(mm, mm$L1), nrow)
+
+mat = data.frame(Glucose = glc, Galatose = gal, Glycerol = gly)
+mat = cbind(mat, Plates = rownames(mat))
+mat = suppressMessages(melt(mat))
+colnames(mat) = c("Plates", "Nutrient", "Counts")
+mat$Counts = factor(mat$Counts)
+mat$Plates = factor(as.character(mat$Plates), levels = as.character(c(1:12)))
+
+ggplot(mat, aes(y = Nutrient, x = Plates, fill = Counts)) + theme_grey(base_size = 7) + 
+geom_tile(colour = "white") +  
+scale_fill_manual(values = c( "#bcbddc", "#807dba", "#4a1486")) +
+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+```
+
+```{r, echo=F}
+rm(i, glc, gal, gly, mat, classType)
+```
+
+***
+
+## Merging of all redox screen plates
+
+We then merge the redox values measured across the plates for all the mutants. 
+
+```{r}
+rawDat = vector("list", 3)
+names(rawDat) = c("glc","gal","gly")
+
+for(i in names(rawDat))
+{
+  files = list.files(paste0(path,"plateReadings/", i), full.names=T)
+  #files = grep("Control", files, invert = T, value = T)
+  
+  for(j in files)
+  {
+    # Extracting plate identifier
+    plate = gsub(paste0("_", i,".CSV"), "", sapply(strsplit(j,"/", fixed=T), function(x)x[length(x)]), fixed=T)
+ 
+    # Raw data per plate
+    tmpDat = read.csv(j, skip = 6, stringsAsFactors = F, header = T)
+    if(i == "glc" & plate == "1"){
+      tmpDat = tmpDat[,c(1:3,9)] # because for this file the last two columns are swapped
+    }else{
+      tmpDat = tmpDat[,c(1:3,8)]
+    }
+    
+    colnames(tmpDat)[2:3] = c("Content.Plate", "Group.Plate")
+    
+    # # Correcting the Content annotaion for inversed plates
+    # inversedPlates = c("103", "113", "121", "122", "125", "136", "137", "138", "139",
+    #                    "101", "102", "104", "107", "108", "109", "114", "117", "123", 
+    #                    "124", "131", "135", "142", "150", "170","171")
+    #   
+    # if(sum(plate %in% inversedPlates) == 1)
+    # {
+    #   tmpVal = tmpDat
+    #   tmpVal$Content.Plate[tmpDat$Content.Plate == "Control C5"] = "Control C1"
+    #   tmpVal$Content.Plate[tmpDat$Content.Plate == "Control C6"] = "Control C2"
+    #   tmpVal$Content.Plate[tmpDat$Content.Plate == "Control C7"] = "Control C3"
+    #   tmpVal$Content.Plate[tmpDat$Content.Plate == "Control C8"] = "Control C4"
+    #   tmpDat = tmpVal
+    #   rm(tmpVal)
+    # }
+    # 
+    # # Correcting the map annotaion for inversed plates
+    # if(sum(plate %in% inversedPlates) == 1)
+    # {
+    #   tmpMap = mapPlate
+    #   tmpMap$Content[mapPlate$Content == "Cytoplasm"] = "Mitochondria"
+    #   tmpMap$Content[mapPlate$Content == "Mitochondria"] = "Cytoplasm"
+    #   tmpMap$Content[mapPlate$Content == "Blank"] = "Control"
+    #   tmpMap$Content[mapPlate$Content == "Control"] = "Blank"
+    # }else{tmpMap = mapPlate}
+    
+    
+    tmpMap = mapPlate
+    
+    # Merging the raw data per plate with the above annotation
+    merge.dat = merge(x = tmpDat, y = tmpMap, all = T)
+    merge.dat = merge.dat[order(merge.dat$Group),]
+    merge.dat = merge.dat[,c(1,7,3,6,2,5,4)]
+    rm(tmpDat, tmpMap)
+    
+    # Mutant annotation information per plate
+    ga.tmp = geneAnno[[plate]]
+    colnames(ga.tmp)[ncol(ga.tmp)] = "Well_96"
+    
+    # Merging the above merged object with mutant annotation information
+    merge.dat.gen = merge(x = ga.tmp, y = merge.dat)
+    merge.dat.gen = merge.dat.gen[order(merge.dat.gen$Group, merge.dat.gen$Content),]
+    merge.dat.gen = merge.dat.gen[,c(5,1,6,8,10,2,3,4,11)]
+    
+    # Save the data
+    rawDat[[i]][[plate]] = merge.dat.gen
+    rm(ga.tmp, merge.dat, merge.dat.gen, plate)
+ }
+ rm(files, j)
+}
+```
+
+```{r, echo=F}
+rm(i, geneAnno, mapPlate)
+```
+
+Next, we also merge the values across nutrient conditions and create a single composite data table for the entire screen. We perform some sanity checks on the summarized counts and perform general visualization of the data. 
+
+* In the summary below each nutrient conditions has `12608` values. If we look at the gene annotation file above we see that in total we have gene annotations for `788` genes(rows). Given that we have `4` replicates of the `4 Categories - (Blank, Control, Cyto., Mito.)`, a simple arithmetic check shows exactly what we would expect - `4 x 4 x 788 = 12608`. 
+* Also, in the summary, we obtain `37824` entries for gene symbol. Given that there are `788` genes,`4 Categories`, `3 nutrient types` all in  `4` replicates - the following arithmetic also holds correct `4746 x 4 x 3 x 4 = 37824`
+* Finally, we get `9456` entries for each of   the `4 Categories - (Blank, Control, Cyto., Mito.)`. For each category we have `788` genes in `4` replicates for `3 nutrient types` - the following arithmetic also holds correct `4746 x 4 x 3 = 9456`
+* Also, as expected the sum of all of the `4 Categories - (Blank, Control, Cyto., Mito.)` equals total number of gene symbol which if divides by `3 nutrient types` results in the number for each nutrient type - i.e. `9456 x 4 = 37824` and `37824 / 3 = 12608`.
+
+```{r}
+rawDat = lapply(rawDat, function(x)do.call("rbind", x))
+rawDat = rbind(cbind(rawDat$glc, Type="Glucose"),  cbind(rawDat$gal, Type="Galactose"), cbind(rawDat$gly, Type="Glycerol"))
+
+rownames(rawDat) = 1:nrow(rawDat)
+
+rawDat$roGFP2.ratio = suppressWarnings(as.numeric(rawDat$roGFP2.ratio))
+rawDat$Well = factor(rawDat$Well)
+rawDat$Group = factor(rawDat$Group)
+rawDat$Content = factor(rawDat$Content, levels = c("Blank", "Control", "Cytoplasm", "Mitochondria"))
+rawDat$Type = factor(rawDat$Type, levels = c("Glucose", "Galactose", "Glycerol"))
+
+summary(rawDat)
+```
+
+Here we visualize the counts per Plate and Group in each of the four nutrient conditions. We see that some Groups have no entries, while the rest have counts of `16` which is exactly as expected, since we have 4 categories - *Mitochondria, Cytoplasm, Blank and Control* in quadruplicates. This seems to be the order in which the plate layout was designed.
+
+```{r, fig.width = 20, fig.height = 5, fig.align = "center"}
+vals =  melt(table(rawDat$Plate, rawDat$Group, rawDat$Type))
+colnames(vals) = c("Plates", "Groups", "Nutrient", "Counts")
+vals$Plates = factor(vals$Plates)
+vals$Counts = factor(vals$Counts)
+
+ggplot(vals, aes(x=Groups, y = Plates, fill = Counts)) + theme_grey(base_size = 7) + 
+geom_tile(colour = "white") +  
+scale_fill_manual(values = c("grey90", "black")) +
+facet_wrap(~ Nutrient) +
+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+```
+
+```{r, echo=FALSE}
+rm(vals)
+```
+
+
+Below, we visualize a randomly 1000 rows from the compiled redox screening dataset
+
+```{r}
+
+datatable(rawDat[sample(1:nrow(rawDat), 1000),], rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                         dom = 'Bfrtip', 
+                         buttons = c('csv', 'excel', 'print')
+                         ))
+
+```
+
+***
+## Saving the data
+
+Finally we save the compiled raw Data as a `.RDS` (R data object), `.txt` (tab delimited file) and `.xlsx` excel data file. All our analysis will start from this compiled file.
+
+```{r}
+saveRDS(rawDat, paste0(path,"data/workspaces/YeastMutantRedox_RawData.RDS"))
+write.table(rawDat, paste0(path,"data/workspaces/YeastMutantRedox_RawData.txt"), row.names=F, quote=F, sep="\t")
+WriteXLS(rawDat, ExcelFileName = paste0(path,"data/workspaces/YeastMutantRedox_RawData.xlsx"), 
+AdjWidth =TRUE, BoldHeaderRow = TRUE, FreezeRow = 1)
+```
+
+***
+
+## Session information {#SI}
+
+```{r}
+sessionInfo()
+```
