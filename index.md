@@ -19,13 +19,13 @@ Here we host the `Rmarkdowns` used to analyse the data from the manuscript - [Co
 
 ### Essential DAmP yeast screen
 
-1. Curate various S.cerevisiae specific functional genesets
-2. Raw data quality control
-3. Data Normalization
-4. Hits identification
+1. [Curate various S.cerevisiae specific functional genesets](/Essential_DAmP_screen/src/00_createYeastGenesets.html)
+2. [Raw data quality control](/Essential_DAmP_screen/src/01_rawDataQualityControl.html)
+3. [Data Normalization](/Essential_DAmP_screen/src/02_rawDataNomalization.html)
+4. [Hits identification](/Essential_DAmP_screen/src/03_hitsIdentification.html)
 5. Enrichment analysis
-    - Gene Ontology Biological process
-    - Gene Ontology Molecular function
-    - KEGG pathways
-    - Yeast phenotypes
-    - Yeast Transcription factor targets
+    - [Gene Ontology Biological process](/Essential_DAmP_screen/src/04_enrichmentAnalysis_GOBP.html)
+    - [Gene Ontology Molecular function](/Essential_DAmP_screen/src/04_enrichmentAnalysis_GOMF.html)
+    - [KEGG pathways](/Essential_DAmP_screen/src/04_enrichmentAnalysis_KEEG.html)
+    - [Yeast phenotypes](/Essential_DAmP_screen/src/04_enrichmentAnalysis_Phenotypes.html)
+    - [Yeast Transcription factor targets](/Essential_DAmP_screen/src/04_enrichmentAnalysis_TFtargets.html)
