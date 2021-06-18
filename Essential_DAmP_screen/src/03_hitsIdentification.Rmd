@@ -1,0 +1,646 @@
+---
+title: "Hits identification"
+author: "Ashwini Kumar Sharma, PhD"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    code_folding: hide
+---
+
+```{r knitr_init, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print=100000)
+opts_chunk$set(echo=TRUE,
+	             cache=FALSE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=80)
+```
+
+## Initialization
+
+We start the analysis by initializing the packages required for all the analysis performed in this section. We also define the root directory, within which all the input/output operations for this project will be performed. At the [end of this document](#SI), detailed software version information is provided for easier reproducibility of the analysis.
+
+```{r}
+library(dplyr)
+library(reshape2)
+library(plotly)
+library(ggplot2)
+library(RColorBrewer)
+library(ggrepel)
+library(ggpubr)
+library(gplots)
+library(UpSetR)
+library(venn)
+library(VennDiagram)
+library(DT)
+
+path = "/Users/ashwin/Documents/Projects/YeastScreen/Essential_DAmP_screen/"
+genesets = readRDS(paste0(path,"data/workspaces/YeastGeneSets.RDS"))
+```
+
+***
+
+## Hits identification
+
+Here we show an interactive way to to access the normalized screening data. The red, grey and green horizontal lines highlight the 95th quantile, median and 5th quantile of roGFP2 values repectively in that condition.
+
+```{r, message =  F, warning = F, message = F, fig.align = "center" }
+normDat = readRDS(paste0(path,"data/workspaces/YeastRedox_DAmP_RobustZ_NormalizedData.RDS"))
+#normDat = readRDS(paste0(path,"data/workspaces/YeastRedox_DAmP_PlateControl_NormalizedData.RDS"))
+
+hits = normDat$redox_table %>%
+       group_by(Organelle, Nutrient) %>%
+       arrange(-Median_roGFP2_ratio) %>%
+  
+       mutate(Rank1 = dense_rank(-Median_roGFP2_ratio)) %>%
+       mutate(Rank2 = dense_rank(Median_roGFP2_ratio)) %>%
+  
+       mutate(Median_roGFP2_ratio = round(Median_roGFP2_ratio,2)) %>%
+       mutate(MedVal = median(Median_roGFP2_ratio)) %>%
+       mutate(upperquant = quantile(Median_roGFP2_ratio, 0.95)) %>%
+       mutate(lowerquant = quantile(Median_roGFP2_ratio, 0.05)) %>%
+       ungroup()
+  
+p_print = ggplot(hits, aes(x = Rank1, y = Median_roGFP2_ratio)) + theme_bw(base_size = 7) + 
+          labs(x = "Sorted Ranks of mutants (high to low roGFP2 ratios)", y = "Normalized by plate median (roGFP2 ratios)") +
+      
+          geom_point(size = 0.3) +
+    
+          facet_wrap(Organelle ~ Nutrient, scales = "free", ncol = 6) + 
+            
+          geom_hline(aes(yintercept=MedVal), col="grey20") +
+          geom_hline(aes(yintercept=upperquant), col="firebrick") +
+          geom_hline(aes(yintercept=lowerquant), col="forestgreen") +
+      
+          theme(
+                axis.text.x = element_blank(), 
+                axis.ticks = element_blank(),
+                axis.text = element_text(colour="black"),
+                strip.background = element_blank(),
+                panel.border = element_rect(size=0.3),
+                panel.grid = element_blank()
+                ) +
+    
+          geom_text(data = hits[hits$Rank1 <= 10,], aes(x = 200, label = Genes), size=2) +
+          geom_text(data = hits[hits$Rank2 <= 10,], aes(x = 200, label= Genes), size=2) 
+
+pdf(paste0(path,"analysis/tophits/top_and_low_10_hits.pdf"), width=7.5, height=2.5)
+  print(p_print)
+invisible(dev.off())
+
+
+p_html =  ggplot(hits) + theme_minimal(base_size = 9) + 
+          labs(x = "Sorted Ranks of mutants (high to low roGFP2 ratios)", y = "Normalized by plate median (roGFP2 ratios)")+
+          geom_point(aes(text = Genes, x = Rank1, y = Median_roGFP2_ratio)) +
+          facet_wrap(Organelle ~ Nutrient, scales = "free", ncol = 3) + 
+          geom_hline(aes(yintercept=MedVal), col="grey20") +
+          geom_hline(aes(yintercept=upperquant), col="firebrick") +
+          geom_hline(aes(yintercept=lowerquant), col="forestgreen") +
+          theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+
+ggplotly(p_html) %>% toWebGL()
+
+```
+
+***
+
+## Hits overlaps
+
+Next we look at the overlaps between top hits i.e topmost 5% and lowest 5% of roGFP2 ratios across different nutrient conditions and organelles. This corresponds to the hits (dots) above the red and below the green horizontal lines in the above figure.
+
+```{r}
+#Cytoplasm
+cyto = normDat$redox_table[normDat$redox_table$Organelle == "Cytoplasm",]
+cyto = split(cyto, cyto$Nutrient)
+
+#Mitochondria
+mito = normDat$redox_table[normDat$redox_table$Organelle == "Mitochondria",]
+mito = split(mito, mito$Nutrient)
+
+cytoOX = lapply(cyto, function(x){
+                                  genes = x$Genes
+                                  vals = x$Median_roGFP2_ratio
+                                  qt.top = quantile(vals, 0.95)
+                                  selgenes = unique(genes[vals > qt.top])
+                                  })
+
+mitoOX = lapply(mito, function(x){
+                                  genes = x$Genes
+                                  vals = x$Median_roGFP2_ratio
+                                  qt.top = quantile(vals, 0.95)
+                                  selgenes = unique(genes[vals > qt.top])
+                                  })
+
+cytoRX = lapply(cyto, function(x){
+                                  genes = x$Genes
+                                  vals = x$Median_roGFP2_ratio
+                                  qt.low = quantile(vals, 0.05)
+                                  selgenes = unique(genes[vals < qt.low])
+                                  })
+
+mitoRX = lapply(mito, function(x){
+                                  genes = x$Genes
+                                  vals = x$Median_roGFP2_ratio
+                                  qt.low = quantile(vals, 0.05)
+                                  selgenes = unique(genes[vals < qt.low])
+                                  })
+
+topHits = list(
+             Cytoplasm_Glucose_high_roGFP2 = cytoOX$Glucose,
+             Cytoplasm_Galactose_high_roGFP2 = cytoOX$Galactose,
+             Cytoplasm_Glycerol_high_roGFP2 = cytoOX$Glycerol,
+             
+             Mitochondria_Glucose_high_roGFP2 = mitoOX$Glucose,
+             Mitochondria_Galactose_high_roGFP2 = mitoOX$Galactose,
+             Mitochondria_Glycerol_high_roGFP2 = mitoOX$Glycerol,
+             
+             Cytoplasm_Glucose_low_roGFP2 = cytoRX$Glucose,
+             Cytoplasm_Galactose_low_roGFP2 = cytoRX$Galactose,
+             Cytoplasm_Glycerol_low_roGFP2 = cytoRX$Glycerol,
+
+             Mitochondria_Glucose_low_roGFP2 = mitoRX$Glucose,
+             Mitochondria_Galactose_low_roGFP2 = mitoRX$Galactose,
+             Mitochondria_Glycerol_low_roGFP2 = mitoRX$Glycerol)
+
+topPaths = function(dat)
+{
+  a  = Reduce(intersect, dat)
+  
+  # KEGG
+  gs1 = sapply(genesets$KEGG, function(x){sum(a %in% x)/length(a)*100})
+  gna = sapply(genesets$KEGG, function(x){paste(a[a %in% x], collapse = ";")})
+  gs1 = data.frame(Geneset = names(gs1), Type = "KEGG", PercentOverlap = round(as.numeric(gs1),2), Genes = gna)
+  rownames(gs1) = 1:nrow(gs1)
+  gs = gs1[gs1$PercentOverlap > 0,]
+  rm(gs1, gna)
+  
+  # GOBP
+  gs1 = sapply(genesets$GOBP, function(x){sum(a %in% x)/length(a)*100})
+  gna = sapply(genesets$GOBP, function(x){paste(a[a %in% x], collapse = ";")})
+  gs1 = data.frame(Geneset = names(gs1), Type = "GOBP", PercentOverlap = round(as.numeric(gs1),2), Genes = gna)
+  rownames(gs1) = 1:nrow(gs1)
+  gs = rbind(gs, gs1[gs1$PercentOverlap > 0,])
+  rm(gs1, gna)
+  
+  # GOMF
+  gs1 = sapply(genesets$GOMF, function(x){sum(a %in% x)/length(a)*100})
+  gna = sapply(genesets$GOMF, function(x){paste(a[a %in% x], collapse = ";")})
+  gs1 = data.frame(Geneset = names(gs1), Type = "GOMF", PercentOverlap = round(as.numeric(gs1),2), Genes = gna)
+  rownames(gs1) = 1:nrow(gs1)
+  gs = rbind(gs, gs1[gs1$PercentOverlap > 0,])
+  rm(gs1, gna)
+  
+  # Phenotype
+  gs1 = sapply(genesets$Phenotype, function(x){sum(a %in% x)/length(a)*100})
+  gna = sapply(genesets$Phenotype, function(x){paste(a[a %in% x], collapse = ";")})
+  gs1 = data.frame(Geneset = names(gs1), Type = "Phenotypes", PercentOverlap = round(as.numeric(gs1),2), Genes = gna)
+  rownames(gs1) = 1:nrow(gs1)
+  gs = rbind(gs, gs1[gs1$PercentOverlap > 0,])
+  rm(gs1, gna)
+  
+  gs = gs[order(gs$PercentOverlap, decreasing = T),]
+  
+  return(gs)
+}
+
+topHits_allcarbon = list(common_hits = list(
+                                        Cytoplasm_high_roGFP2_commom = Reduce(intersect, cytoOX),
+                                        Cytoplasm_low_roGFP2_commom = Reduce(intersect, cytoRX),
+                                        Mitochondria_high_roGFP2_commom = Reduce(intersect, mitoOX),
+                                        Mitochondria_low_roGFP2_commom = Reduce(intersect, mitoRX)
+                              ),
+                         common_pathways = list(
+                                        Cytoplasm_high_roGFP2_commom_path = topPaths(cytoOX),
+                                        Cytoplasm_low_roGFP2_commom_path = topPaths(cytoRX),
+                                        Mitochondria_high_roGFP2_commom_path = topPaths(mitoOX),
+                                        Mitochondria_low_roGFP2_commom_path = topPaths(mitoRX)
+                             )
+                        )
+
+rm(cyto, mito, cytoRX, cytoOX, mitoRX, mitoOX, topPaths)
+```
+
+We show venn diagrams and correponding tables (only for the common hits across all nutrient condition) for the overlaps between top hits i.e topmost 5% and lowest 5% of roGFP2 ratios across cytoplasm and mitochondria
+
+
+
+
+### Common hits TOPMOST 5% roGFP2 ratios: Cytoplasm - all nutrient conditions
+
+```{r}
+par(mar = c(1,1,1,1), xpd = T)
+venn::venn(topHits[1:3], box = F, zcolor = brewer.pal(6, "Set1"), plotsize = 30)
+```
+
+The common hits across all nutrient conditions are -
+
+```{r}
+topHits_allcarbon$common_hits$Cytoplasm_high_roGFP2_commom
+```
+
+The overlap of the above genes with genesets from KEGG, GO BP/MF and Phenotypes -
+
+```{r}
+datatable(topHits_allcarbon$common_pathways$Cytoplasm_high_roGFP2_commom_path, 
+          rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         )) %>% formatStyle("Geneset","white-space"="nowrap")
+```
+
+The roGFP2 ratios (redox scores) for the common hits (topmost 5%) -
+
+```{r}
+cyto = normDat$redox_table[normDat$redox_table$Organelle == "Cytoplasm",]
+tmpdat = cyto[cyto$Genes %in% topHits_allcarbon$common_hits$Cytoplasm_high_roGFP2_commom,]
+tmpdat[,5:9] = round(tmpdat[,5:9], 3)
+
+datatable(tmpdat, rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         ))
+```
+
+```{r, echo = F}
+rm(tmpdat)
+```
+
+
+
+
+
+### Common hits LOWEST 5% roGFP2 ratios: Cytoplasm - all nutrient conditions
+
+```{r}
+par(mar = c(1,1,1,1), xpd = T)
+venn::venn(topHits[7:9], box = F, zcolor = brewer.pal(6, "Set1"), plotsize = 30)
+```
+
+The common hits across all nutrient conditions are -
+
+```{r}
+topHits_allcarbon$common_hits$Cytoplasm_low_roGFP2_commom
+```
+
+The overlap of the above genes with genesets from KEGG, GO BP/MF and Phenotypes -
+
+```{r}
+datatable(topHits_allcarbon$common_pathways$Cytoplasm_low_roGFP2_commom_path, 
+          rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         )) %>% formatStyle("Geneset","white-space"="nowrap")
+```
+
+The roGFP2 ratios (redox scores) for the common hits (lowest 5%) -
+
+```{r}
+cyto = normDat$redox_table[normDat$redox_table$Organelle == "Cytoplasm",]
+tmpdat = cyto[cyto$Genes %in% topHits_allcarbon$common_hits$Cytoplasm_low_roGFP2_commom,]
+tmpdat[,5:9] = round(tmpdat[,5:9], 3)
+
+datatable(tmpdat, rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         ))
+```
+
+```{r, echo = F}
+rm(tmpdat)
+```
+
+
+
+
+### Common hits TOPMOST 5% roGFP2 ratios: Mitochondria - all nutrient conditions
+
+```{r}
+par(mar = c(1,1,1,1), xpd = T)
+venn::venn(topHits[4:6], box = F, zcolor = brewer.pal(6, "Set1"), plotsize = 30)
+```
+
+The common hits across all nutrient conditions are -
+
+```{r}
+topHits_allcarbon$common_hits$Mitochondria_high_roGFP2_commom
+```
+
+The overlap of the above genes with genesets from KEGG, GO BP/MF and Phenotypes -
+
+```{r}
+datatable(topHits_allcarbon$common_pathways$Mitochondria_high_roGFP2_commom_path, 
+          rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         )) %>% formatStyle("Geneset","white-space"="nowrap")
+```
+
+The roGFP2 ratios (redox scores) for the common hits (topmost 5%) -
+
+```{r}
+cyto = normDat$redox_table[normDat$redox_table$Organelle == "Mitochondria",]
+tmpdat = cyto[cyto$Genes %in% topHits_allcarbon$common_hits$Mitochondria_high_roGFP2_commom,]
+tmpdat[,5:9] = round(tmpdat[,5:9], 3)
+
+datatable(tmpdat, rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         ))
+```
+
+```{r, echo = F}
+rm(tmpdat)
+```
+
+
+
+
+### Common hits LOWEST 5% roGFP2 ratios: Mitochondria - all nutrient conditions
+
+```{r}
+par(mar = c(1,1,1,1), xpd = T)
+venn::venn(topHits[10:12], box = F, zcolor = brewer.pal(6, "Set1"), plotsize = 30)
+```
+
+The common hits across all nutrient conditions are -
+
+```{r}
+topHits_allcarbon$common_hits$Mitochondria_low_roGFP2_commom
+```
+
+The overlap of the above genes with genesets from KEGG, GO BP/MF and Phenotypes -
+
+```{r}
+datatable(topHits_allcarbon$common_pathways$Mitochondria_low_roGFP2_commom_path,
+          rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         )) %>% formatStyle("Geneset","white-space"="nowrap")
+```
+
+The roGFP2 ratios (redox scores) for the common hits (lowest 5%) -
+
+```{r}
+cyto = normDat$redox_table[normDat$redox_table$Organelle == "Mitochondria",]
+tmpdat = cyto[cyto$Genes %in% topHits_allcarbon$common_hits$Mitochondria_low_roGFP2_commom,]
+tmpdat[,5:9] = round(tmpdat[,5:9], 3)
+
+datatable(tmpdat, rownames = FALSE, filter="top", class="compact",
+          extensions = c('Buttons') , 
+          options = list(autoWidth = TRUE,
+                          dom = 'Blfrtip', 
+                          buttons = c('csv', 'excel')
+                         ))
+```
+
+```{r, echo = FALSE}
+rm(tmpdat, mito, cyto)
+```
+
+
+```{r}
+
+redoxVenn = function(index, col.groups, col.circles, col.main)
+{
+  vennP = venn.diagram(
+  x = topHits[index],
+  category.names = sapply(strsplit(names(topHits), "_"), function(x)x[2])[index],
+  main = sapply(strsplit(names(topHits), "_"), function(x)x[1])[index[1]],
+  filename = NULL,
+  
+  lwd = 0.7,
+  col = col.circles,
+  main.col = col.main,
+  cex = 0.5,
+  fontfamily = "sans",
+  main.cex =  0.5,
+  cat.cex = 0.5,
+  cat.default.pos = "outer",
+  cat.pos = c(-30, 30, 180),
+  cat.dist = c(0.05, 0.05, 0.05),
+  cat.fontfamily = "sans",
+  cat.col = col.groups)
+  
+  return(vennP)
+}
+
+# Cyto - Glu, Gal, Gly - HIGH roGFP2
+venn1 = redoxVenn(index = 1:3, col.groups = rep("grey70",3), col.circles = rep("#252525",3), col.main ="#A6611A")
+  
+# Mito - Glu, Gal, Gly - HIGH roGFP2
+venn2 = redoxVenn(index = 4:6, col.groups = rep("grey70",3), col.circles = rep("#252525",3), col.main ="#7B3294")
+
+# Cyto - Glu, Gal, Gly - LOW roGFP2
+venn3 = redoxVenn(index = 7:9, col.groups = rep("grey70",3), col.circles = rep("#bdbdbd",3), col.main ="#A6611A")
+  
+# Mito - Glu, Gal, Gly - LOW roGFP2
+venn4 = redoxVenn(index = 10:12, col.groups = rep("grey70",3), col.circles = rep("#bdbdbd",3), col.main ="#7B3294")
+
+# PLOT
+pdf(paste0(path, 'analysis/tophits/compartment_specific_venn_top_low_5per.pdf'), width = 7, height = 3)
+
+  # layout
+  gl <- grid.layout(nrow = 2, ncol = 4)
+  
+  # setup viewports
+  vp.1 <- viewport(layout.pos.col = 1, layout.pos.row = 1) 
+  vp.2 <- viewport(layout.pos.col = 2, layout.pos.row = 1) 
+  vp.3 <- viewport(layout.pos.col = 3, layout.pos.row = 1) 
+  vp.4 <- viewport(layout.pos.col = 4, layout.pos.row = 1) 
+  vp.5 <- viewport(layout.pos.col = 1, layout.pos.row = 2) 
+  vp.6 <- viewport(layout.pos.col = 2, layout.pos.row = 2) 
+  vp.7 <- viewport(layout.pos.col = 3, layout.pos.row = 2) 
+  vp.8 <- viewport(layout.pos.col = 4, layout.pos.row = 2) 
+  
+  # init layout
+  pushViewport(viewport(layout = gl))
+
+  pushViewport(vp.1)
+  grid.text(label = topHits_allcarbon$common_pathways$Cytoplasm_high_roGFP2_commom_path$Geneset[1:10], 
+            x = 0.99, y = seq(0.9, 0.11, -0.08), just = "right", gp=gpar(fontsize=6, col="grey"))
+  popViewport()
+  
+  pushViewport(vp.2)
+  grid.draw(venn1)
+  popViewport()
+  
+  pushViewport(vp.3)
+  grid.draw(venn2)
+  popViewport()
+  
+  pushViewport(vp.4)
+   grid.text(label = topHits_allcarbon$common_pathways$Mitochondria_high_roGFP2_commom_path$Geneset[1:10], 
+            x = 0.01, y = seq(0.9, 0.11, -0.08), just = "left", gp=gpar(fontsize=6, col="grey"))
+  popViewport()
+ 
+  pushViewport(vp.5)
+   grid.text(label = topHits_allcarbon$common_pathways$Cytoplasm_low_roGFP2_commom_path$Geneset[1:10], 
+            x = 0.99, y = seq(0.9, 0.11, -0.08), just = "right", gp=gpar(fontsize=6, col="grey"))
+  popViewport()
+  
+  pushViewport(vp.6)
+  grid.draw(venn3)
+  popViewport()
+  
+  pushViewport(vp.7)
+  grid.draw(venn4)
+  popViewport()
+  
+  pushViewport(vp.8)
+  grid.text(label = topHits_allcarbon$common_pathways$Mitochondria_low_roGFP2_commom_path$Geneset[1:10], 
+            x = 0.01, y = seq(0.9, 0.11, -0.08), just = "left", gp=gpar(fontsize=6, col="grey"))
+  popViewport()
+  
+  popViewport(1)
+  
+  rm(gl, vp.1, vp.2, vp.3, vp.4, vp.5, vp.6, vp.7, vp.8, venn1, venn2, venn3, venn4)
+invisible(dev.off())
+
+```
+
+```{r, echo = F}
+f = list.files(paste0(path, "src"), pattern = "VennDiagram", full.names = T)
+file.remove(f)
+```
+
+***
+
+## Positive control test
+
+Next we tried to validate the screening results by looking at the roGFP2 ratios of mutants know to affect oxidation taken from [Aung-Htut et.al](https://pubmed.ncbi.nlm.nih.gov/22094416/)
+
+```{r}
+
+# rdx1 = genesets$GOBP$`response to oxidative stress`
+# rdx2 = genesets$GOMF$`oxidoreductase activity`
+# rdx3 = genesets$KEGG$`Oxidative phosphorylation`
+# rdx4 = genesets$KEGG$`Glutathione metabolism`
+# 
+# rdx1 = unique(c(rdx1, rdx2, rdx3, rdx4))
+# rdx2 = unique(c(rdx3, rdx4))
+# 
+# #-------------------
+# rdx3 = c(
+#   grep("GPX", rdx1, value = T),
+#   grep("GRX", rdx1, value = T),
+#   grep("GSH", rdx1, value = T),
+#   grep("SDH", rdx1, value = T),
+#   grep("ATP", rdx1, value = T),
+#   grep("COX", rdx1, value = T),
+#   grep("COR", rdx1, value = T),
+#   grep("SOD", rdx1, value = T),
+#   grep("TRX", rdx1, value = T),
+#   grep("TRR", rdx1, value = T)
+# )
+# rdx3
+
+# Manisha selected redox genes
+rdx = c("MSN2", "MSN4", "YAP1", "SKN7", "GND1", "GND2", "TAL1", "SOL3", "SOL4", "RPE1",
+"TKL1", "ALD6", "IDP1", "POS5", "IDP2", "IDP3", "ALD4", "ALD5","YEF1","UTR1", "ZWF1", "MAE1",
+"GLR1", "GPX1", "GPX2", "GPX3", "GRX1", "GRX2", "GRX3", "GRX4", "GRX5", "GRX6",
+"GRX7", "GRX8", "GSH1", "GSH2", "TRX1", "TRX2", "TRX3", "TRR1", "TRR2", "PRX1",
+"TSA1", "TSA2", "AHP1", "DOT5", "CTT1", "CTA1", "SOD1", "SOD2", "CCP1")
+
+rdx
+```
+
+We now check if these positive controls are observed in **topmost or lowest 25%** of the normalized roGFP2 ratios. *NOTE: that the 25% cutoff is more liberal than the 5% cutoff we have taken for all our analysis above *
+
+
+```{r}
+#Cytoplasm
+cyto = normDat$redox_table[normDat$redox_table$Organelle == "Cytoplasm",]
+cyto = split(cyto, cyto$Nutrient)
+
+#Mitochondria
+mito = normDat$redox_table[normDat$redox_table$Organelle == "Mitochondria",]
+mito = split(mito, mito$Nutrient)
+
+cytoOX = lapply(cyto, function(x){
+                                  genes = x$Genes
+                                  vals = x$Median_roGFP2_ratio
+                                  qt.top = quantile(vals, 0.75)
+                                  selgenes = unique(genes[vals > qt.top])
+                                  selgenes = selgenes[selgenes %in% rdx]
+                                  })
+
+mitoOX = lapply(mito, function(x){
+                                  genes = x$Genes
+                                  vals = x$Median_roGFP2_ratio
+                                  qt.top = quantile(vals, 0.75)
+                                  selgenes = unique(genes[vals > qt.top])
+                                  selgenes = selgenes[selgenes %in% rdx]
+                                  })
+
+cytoRX = lapply(cyto, function(x){
+                                  genes = x$Genes
+                                  vals = x$Median_roGFP2_ratio
+                                  qt.low = quantile(vals, 0.25)
+                                  selgenes = unique(genes[vals < qt.low])
+                                  selgenes = selgenes[selgenes %in% rdx]
+                                  })
+
+mitoRX = lapply(mito, function(x){
+                                  genes = x$Genes
+                                  vals = x$Median_roGFP2_ratio
+                                  qt.low = quantile(vals, 0.25)
+                                  selgenes = unique(genes[vals < qt.low])
+                                  selgenes = selgenes[selgenes %in% rdx]
+                                  })
+
+topRdxHits = list(
+             Cytoplasm_Glucose_high_roGFP2 = cytoOX$Glucose,
+             Cytoplasm_Galactose_high_roGFP2 = cytoOX$Galactose,
+             Cytoplasm_Glycerol_high_roGFP2 = cytoOX$Glycerol,
+             
+             Mitochondria_Glucose_high_roGFP2 = mitoOX$Glucose,
+             Mitochondria_Galactose_high_roGFP2 = mitoOX$Galactose,
+             Mitochondria_Glycerol_high_roGFP2 = mitoOX$Glycerol,
+             
+             Cytoplasm_Glucose_low_roGFP2 = cytoRX$Glucose,
+             Cytoplasm_Galactose_low_roGFP2 = cytoRX$Galactose,
+             Cytoplasm_Glycerol_low_roGFP2 = cytoRX$Glycerol,
+
+             Mitochondria_Glucose_low_roGFP2 = mitoRX$Glucose,
+             Mitochondria_Galactose_low_roGFP2 = mitoRX$Galactose,
+             Mitochondria_Glycerol_low_roGFP2 = mitoRX$Glycerol)
+
+rm(cyto, mito, cytoOX, mitoOX, cytoRX, mitoRX)
+
+paste0("% of positive control redox genes (n=51) found in the top/low (25%) roGFp2 ratio = ",
+       round(sum(rdx %in% unique(unlist(topRdxHits)))/length(rdx) * 100, 2))
+
+```
+
+This positive hit corresponds to 
+
+```{r}
+unlist(topRdxHits)
+```
+
+## Session information {#SI}
+```{r}
+sessionInfo()
+```
